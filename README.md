@@ -124,4 +124,4 @@ jupyter notebook affordability_default_risk.ipynb
 - **Scores would need calibrating** before being read as probabilities of default.
 - **A US platform, 2007-2018.** The affordability *principle* travels; the exact thresholds do not.
 
-*Data: Lending Club accepted-loans dataset (2007-2018), via Kaggle. Built as a portfolio project.*
+*Data: Lending Club accepted-loans dataset (2007-2018), via Kaggle.*
