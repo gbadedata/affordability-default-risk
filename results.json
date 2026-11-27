@@ -1,0 +1,44 @@
+{
+  "window_months": 24,
+  "loans_all": 2260662,
+  "loans_observable": 1218296,
+  "default_rate": 0.1079,
+  "issued": "2007-2016",
+  "train": {
+    "n": 466340,
+    "issued": "<=2014",
+    "default_rate": 0.0944
+  },
+  "test": {
+    "n": 751956,
+    "issued": "2015-2016",
+    "default_rate": 0.1164
+  },
+  "out_of_time": {
+    "credit": {
+      "roc_auc": 0.62,
+      "pr_auc": 0.166
+    },
+    "affordability": {
+      "roc_auc": 0.683,
+      "pr_auc": 0.216
+    },
+    "both": {
+      "roc_auc": 0.683,
+      "pr_auc": 0.218
+    },
+    "ks_both": 0.264
+  },
+  "random_split_roc_auc": {
+    "credit": 0.624,
+    "affordability": 0.683,
+    "both": 0.69
+  },
+  "default_rate_by_payment_to_income": {
+    "<5%": 0.0773,
+    "5-10%": 0.1024,
+    "10-15%": 0.14,
+    "15-20%": 0.1651,
+    ">20%": 0.2043
+  }
+}

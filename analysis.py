@@ -1,3 +1,21 @@
+# %% [markdown]
+# # Can they afford to repay? Affordability-based default risk
+#
+# Credit scores look backwards: they summarise how someone has handled debt before. Affordability asks
+# whether the repayments fit the borrower's income and existing commitments. This notebook tests, on real
+# Lending Club loans, whether affordability measures predict default as well as the credit score and bureau
+# record, and whether they add anything on top of them.
+#
+# **Outcome.** Default within 24 months of issue. A loan counts as defaulted if it was charged off and its
+# default date (last payment plus four months, roughly 90+ days past due) falls inside the window. Only loans
+# whose whole 24-month window had passed by the data snapshot (March 2019) are used, so recent loans are not
+# scored on an outcome that has not happened yet. Earlier versions kept only finished loans, which
+# over-represents defaults in recent vintages because the loans still running are mostly the good ones.
+#
+# **Test.** Models are trained on loans issued up to 2014 and tested on loans issued in 2015-2016, so the
+# test is on later borrowers the model never saw. The data is built by `build_dataset.py` from the raw file.
+
+# %%
 import pandas as pd, numpy as np, matplotlib
 matplotlib.use("Agg"); import matplotlib.pyplot as plt, seaborn as sns
 from sklearn.model_selection import train_test_split
@@ -23,6 +41,12 @@ AFFORD = ["annual_inc_eff","dti_eff","payment_to_income","loan_to_income","insta
 CREDIT = ["fico","delinq_2yrs","inq_last_6mths","revol_util","open_acc","pub_rec","total_acc","credit_history_yrs"]
 BOTH = AFFORD + CREDIT
 
+# %% [markdown]
+# ## 1. The affordability gradient
+# Default rate by three affordability measures: the annual loan payment as a share of income, the
+# debt-to-income ratio (using the joint figures for joint applications), and the loan size as a share of income.
+
+# %%
 # ---------------- FIG 1: the affordability gradient ----------------
 fig, ax = plt.subplots(1, 3, figsize=(15, 4.5))
 def gradient(col, bins, labels, axis, xlabel):
@@ -37,6 +61,12 @@ plt.tight_layout(); plt.savefig("figures/01_affordability_gradient.png"); plt.cl
 print("\nDefault rate by payment-to-income:")
 print(df.groupby(pd.cut(df["payment_to_income"], [0,.05,.10,.15,.20,2], labels=["<5%","5-10%","10-15%","15-20%",">20%"]))["default"].mean().round(3).to_string())
 
+# %% [markdown]
+# ## 2. Affordability within the same credit score
+# If affordability only repeated what the credit score already says, default would be flat across DTI
+# within a FICO band. The heatmap holds FICO fixed and varies DTI.
+
+# %%
 # ---------------- FIG 2: affordability adds signal BEYOND the credit score ----------------
 fico_bins = [660,680,700,720,740,760,850]; fico_lab = ["660-680","680-700","700-720","720-740","740-760","760+"]
 dti_bins = [0,10,20,30,40,100];           dti_lab = ["<10","10-20","20-30","30-40",">40"]
@@ -49,6 +79,15 @@ plt.title("Even at the same credit score, worse affordability means more default
 plt.tight_layout(); plt.savefig("figures/02_fico_vs_affordability.png"); plt.close()
 print("\nWithin FICO 700-720, default rate by DTI:"); print((piv.loc["700-720"]*100).round(0).to_string())
 
+# %% [markdown]
+# ## 3. Out-of-time test: credit score vs affordability vs both
+# The same XGBoost settings are trained on three feature sets, so any difference comes from the features.
+# The credit set is FICO plus bureau fields; the affordability set is income, DTI, payment and loan size
+# measures. Lending Club's own grade and interest rate are left out because they already encode its risk view.
+# With roughly one loan in nine defaulting, PR-AUC is reported next to ROC-AUC; a model with no skill scores
+# the default rate.
+
+# %%
 # ---------------- MODELS: credit-only vs affordability-only vs both ----------------
 # Out-of-time split: train on loans issued up to 2014, test on later loans the model never saw.
 dev, oot = df["issue_year"] <= 2014, df["issue_year"] >= 2015
@@ -68,20 +107,32 @@ m_cr, p_cr, auc_cr, ap_cr = run(CREDIT, "Credit score + bureau")
 m_af, p_af, auc_af, ap_af = run(AFFORD, "Affordability only")
 m_bo, p_bo, auc_bo, ap_bo = run(BOTH,   "Both combined")
 
+# %% [markdown]
+# ### Comparing the three models
+
+# %%
 # ---------------- FIG 3: model comparison ----------------
 fig, ax = plt.subplots(1, 2, figsize=(13, 5))
 for name, p, c in [("Credit score + bureau", p_cr, "#4c72b0"), ("Affordability only", p_af, "#dd8452"), ("Both combined", p_bo, "#55a868")]:
     fpr, tpr, _ = roc_curve(yte, p); ax[0].plot(fpr, tpr, c=c, label=f"{name} (AUC {roc_auc_score(yte,p):.3f})")
 ax[0].plot([0,1],[0,1],"k--",lw=1); ax[0].set_xlabel("False positive rate"); ax[0].set_ylabel("True positive rate")
-ax[0].set_title("Affordability alone rivals the credit score; together they win"); ax[0].legend()
+lift = auc_bo - auc_af
+ax[0].set_title("Affordability outranks the credit score; " + ("combining adds a little more" if lift >= 0.005 else "bureau data adds little on top"))
+ax[0].legend()
 comp = pd.DataFrame({"ROC-AUC":[auc_cr,auc_af,auc_bo],"PR-AUC":[ap_cr,ap_af,ap_bo]},
                     index=["Credit\n+bureau","Afford-\nability","Both"])
 comp.plot(kind="bar", ax=ax[1], color=["#4c72b0","#55a868"]); ax[1].set_ylabel("score"); ax[1].set_ylim(0,max(auc_bo,0.75)*1.1)
 ax[1].axhline(yte.mean(), ls=":", color="grey", label=f"no-skill PR-AUC ({yte.mean():.2f})")
 ax[1].set_title("Affordability adds real predictive power"); ax[1].tick_params(axis="x", rotation=0); ax[1].legend()
 plt.tight_layout(); plt.savefig("figures/03_model_comparison.png"); plt.close()
-print(f"\nAffordability-only AUC ({auc_af:.3f}) vs credit-only ({auc_cr:.3f}); combining lifts to {auc_bo:.3f}")
+print(f"\nAffordability-only AUC ({auc_af:.3f}) vs credit-only ({auc_cr:.3f}); combined {auc_bo:.3f} ({lift:+.3f} over affordability alone)")
 
+# %% [markdown]
+# ## 4. What the combined model relies on
+# SHAP values on 3,000 test loans. They show how the model uses each feature, not cause and effect: term
+# length, for example, partly reflects who chooses a 60-month loan.
+
+# %%
 # ---------------- FIG 4: what drives default (SHAP, combined model) ----------------
 samp = Xte.sample(3000, random_state=RND); sv = shap.TreeExplainer(m_bo).shap_values(samp)
 plt.figure(); shap.summary_plot(sv, samp, show=False, max_display=12)
@@ -90,6 +141,10 @@ plt.tight_layout(); plt.savefig("figures/04_shap_summary.png", bbox_inches="tigh
 imp = pd.Series(np.abs(sv).mean(0), index=samp.columns).sort_values(ascending=False)
 print("\nTop default drivers (mean |SHAP|):"); print(imp.head(8).round(3).to_string())
 
+# %% [markdown]
+# ## 5. Income on its own
+
+# %%
 # ---------------- FIG 5: lower income, higher default ----------------
 dec = df.groupby(pd.qcut(df["annual_inc_eff"], 10, labels=False))["default"].mean()
 plt.figure(figsize=(8,5))
@@ -99,6 +154,11 @@ plt.xlabel("income decile (1 = lowest, 10 = highest)"); plt.ylabel("default rate
 plt.title("Default falls steadily as income rises"); plt.legend(); plt.xticks(range(1,11))
 plt.tight_layout(); plt.savefig("figures/05_income_gradient.png"); plt.close()
 
+# %% [markdown]
+# ## 6. How well the combined model separates outcomes
+# KS is the largest gap between the cumulative score distributions of loans that defaulted and loans that did not.
+
+# %%
 # ---------------- FIG 6: score separation (combined model) ----------------
 ks = ks_2samp(p_bo[yte==1], p_bo[yte==0]).statistic
 plt.figure(figsize=(8,5))
@@ -108,6 +168,13 @@ plt.xlabel("predicted default risk"); plt.ylabel("density")
 plt.title(f"The combined model separates outcomes (KS = {ks:.2f})"); plt.legend()
 plt.tight_layout(); plt.savefig("figures/06_score_separation.png"); plt.close()
 print(f"\nCombined-model KS statistic = {ks:.3f}")
+# %% [markdown]
+# ## 7. A random split, for comparison only
+# Earlier versions tested on a random 25% of loans. Mixing years lets the model see the same economic
+# conditions in training and test, so a random split usually flatters it. It is kept here only to show the
+# size of that effect; the out-of-time results above are the ones to quote.
+
+# %%
 # ---------------- random split, for comparison with earlier versions only ----------------
 rXtr, rXte, rytr, ryte = train_test_split(df[BOTH], df["default"], test_size=0.25, stratify=df["default"], random_state=RND)
 random_split = {}
@@ -118,6 +185,11 @@ for feats, name in [(CREDIT, "credit"), (AFFORD, "affordability"), (BOTH, "both"
     random_split[name] = round(float(roc_auc_score(ryte, m.predict_proba(rXte[feats])[:, 1])), 3)
 print(f"\nFor comparison, a random split gives ROC-AUC {random_split}")
 
+# %% [markdown]
+# ## Save the results
+# Every number quoted in the README comes from `results.json`, written here.
+
+# %%
 g = df.groupby(pd.cut(df["payment_to_income"], [0, .05, .10, .15, .20, 2],
                labels=["<5%", "5-10%", "10-15%", "15-20%", ">20%"]), observed=False)["default"].mean()
 results = dict(window_months=WINDOW, loans_all=int(len(df_all)), loans_observable=int(len(df)),
@@ -133,3 +205,13 @@ results = dict(window_months=WINDOW, loans_all=int(len(df_all)), loans_observabl
                default_rate_by_payment_to_income={k: round(float(v), 4) for k, v in g.items()})
 json.dump(results, open("results.json", "w"), indent=2)
 print("\nAll figures and results.json saved. DONE.")
+
+# %% [markdown]
+# ## Limitations
+# - **Approved loans only.** Lending Club had already declined the riskiest applicants, so the credit score's
+#   range is narrow here (most borrowers sit between 660 and 720). That weakens the credit-only model and
+#   means the results do not describe a full applicant population.
+# - **Default date is approximate.** It is set at last payment plus four months, because the file has no
+#   delinquency history.
+# - **One test period.** The out-of-time test covers 2015-2016 issues, a single benign US credit period.
+# - **Stated income.** Income is self-reported and only partly verified, so affordability is measured with noise.
